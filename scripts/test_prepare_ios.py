@@ -34,7 +34,7 @@ class PrepareIosTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             config = json.loads((tauri / "tauri.ios.conf.json").read_text())
             self.assertEqual(config["version"], "0.1.0")
-            self.assertEqual(config["bundle"]["iOS"]["developmentTeam"], "")
+            self.assertEqual(config["bundle"]["iOS"]["developmentTeam"], "0000000000")
             self.assertEqual(config["bundle"]["iOS"]["minimumSystemVersion"], "16.4")
             for path in (tauri / "gen/apple").rglob("*"):
                 if path.is_file():

@@ -15,14 +15,16 @@ def prepare(root: Path) -> None:
     path = tauri / "tauri.ios.conf.json"
     config = json.loads(path.read_text())
     config["version"] = match.group(1)
-    config.setdefault("bundle", {}).setdefault("iOS", {})["developmentTeam"] = ""
+    # cargo-mobile2 rejects an empty team even when --no-sign skips signing.
+    # This placeholder is not an Apple account or a signing authorization.
+    config.setdefault("bundle", {}).setdefault("iOS", {})["developmentTeam"] = "0000000000"
     changes = {}
     for path in (tauri / "gen/apple").rglob("*"):
         if path.is_file() and (path.name == "project.yml" or path.suffix == ".pbxproj"):
             text = path.read_text()
             text = re.sub(
                 r'(\b(?:DEVELOPMENT_TEAM|DevelopmentTeam)\s*[=:]\s*)(?:"[A-Z0-9]{10}"|[A-Z0-9]{10})',
-                r'\1""',
+                r'\g<1>"0000000000"',
                 text,
             )
             changes[path] = text
