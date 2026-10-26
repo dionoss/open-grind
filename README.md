@@ -33,4 +33,4 @@ Validation checks the IPA structure, executable type, arm64 physical-iOS platfor
 
 ## Current verification
 
-Automation tests and workflow validation pass. The first cloud build is being validated; successful iPhone installation and runtime behavior have not been verified.
+Nine automation tests and workflow validation pass. A [cloud build with the physical-iOS validator](https://github.com/dionoss/open-grind/actions/runs/40323016252) completed successfully and uploaded the [verified unsigned IPA artifact](https://github.com/dionoss/open-grind/actions/runs/40323016252/artifacts/12649824982). Successful iPhone signing, installation, and runtime behavior have not been verified.
