@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).with_name("verify_ipa.py")
 
 
 class VerifyIpaTests(unittest.TestCase):
-    def fixture(self, path, *, cpu=0x0100000C, signed=False, provisioned=False, traversal=False):
+    def fixture(self, path, *, cpu=0x0100000C, platform=2, filetype=2, signed=False, provisioned=False, traversal=False):
         base = "Payload/Open Grind.app/"
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr(base + "Info.plist", plistlib.dumps({
@@ -21,7 +21,9 @@ class VerifyIpaTests(unittest.TestCase):
                 "CFBundleShortVersionString": "0.1.0",
                 "MinimumOSVersion": "16.4",
             }))
-            archive.writestr(base + "open-grind", struct.pack("<II", 0xFEEDFACF, cpu) + bytes(24))
+            header = struct.pack("<IIIIIIII", 0xFEEDFACF, cpu, 0, filetype, 1, 24, 0, 0)
+            command = struct.pack("<IIIIII", 0x32, 24, platform, 0x00100400, 0x00120500, 0)
+            archive.writestr(base + "open-grind", header + command)
             if signed:
                 archive.writestr(base + "_CodeSignature/CodeResources", "signed")
             if provisioned:
@@ -44,6 +46,18 @@ class VerifyIpaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "app.ipa"
             self.fixture(path, cpu=0x01000007)
+            self.assertNotEqual(self.run_verify(path).returncode, 0)
+
+    def test_rejects_arm64_simulator_platform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.ipa"
+            self.fixture(path, platform=7)
+            self.assertNotEqual(self.run_verify(path).returncode, 0)
+
+    def test_rejects_arm64_library_instead_of_executable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "app.ipa"
+            self.fixture(path, filetype=6)
             self.assertNotEqual(self.run_verify(path).returncode, 0)
 
     def test_rejects_signed_or_provisioned_payload(self):

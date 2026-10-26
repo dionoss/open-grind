@@ -1,4 +1,4 @@
-"""Check that an IPA contains one unsigned arm64 iPhone app."""
+"""Check one unprovisioned arm64 iPhone app, without executing its code."""
 
 import argparse
 import hashlib
@@ -26,9 +26,32 @@ def verify(path: Path) -> dict:
         if "/" in executable or executable in (".", ".."):
             raise ValueError("Invalid application executable name")
         with archive.open(base + executable) as binary:
-            header = binary.read(8)
-        if len(header) != 8 or struct.unpack("<II", header) != (0xFEEDFACF, 0x0100000C):
-            raise ValueError("Expected a thin arm64 Mach-O executable")
+            header = binary.read(32)
+            if len(header) != 32:
+                raise ValueError("Truncated Mach-O header")
+            magic, cpu, _, filetype, count, size, _, _ = struct.unpack("<IIIIIIII", header)
+            if (magic, cpu, filetype) != (0xFEEDFACF, 0x0100000C, 2):
+                raise ValueError("Expected a thin arm64 Mach-O executable")
+            if not 0 < count <= 4096 or not 0 < size <= 16 * 1024 * 1024:
+                raise ValueError("Invalid Mach-O load-command bounds")
+            commands = binary.read(size)
+        if len(commands) != size:
+            raise ValueError("Truncated Mach-O load commands")
+        offset = 0
+        platforms = []
+        for _ in range(count):
+            if offset + 8 > size:
+                raise ValueError("Missing Mach-O load command")
+            command, length = struct.unpack_from("<II", commands, offset)
+            if length < 8 or offset + length > size:
+                raise ValueError("Invalid Mach-O load-command length")
+            if command == 0x32:  # LC_BUILD_VERSION: platform 2 is iOS, 7 is iOS Simulator.
+                if length < 24:
+                    raise ValueError("Truncated Mach-O build version")
+                platforms.append(struct.unpack_from("<I", commands, offset + 8)[0])
+            offset += length
+        if offset != size or platforms != [2]:
+            raise ValueError("Expected a physical iOS platform load command")
         if base + "embedded.mobileprovision" in names or any(n.startswith(base + "_CodeSignature/") for n in names):
             raise ValueError("IPA contains signing or provisioning data")
         if info["CFBundleIdentifier"] != "org.opengrind.app":
@@ -40,7 +63,10 @@ def verify(path: Path) -> dict:
         "version": info["CFBundleShortVersionString"],
         "minimum_ios": info.get("MinimumOSVersion"),
         "architecture": "arm64",
-        "signed": False,
+        "platform": "ios-device",
+        "provisioning_profile_present": False,
+        "app_signature_resources_present": False,
+        "embedded_adhoc_signature_assessed": False,
     }
 
 
