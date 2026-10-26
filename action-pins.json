@@ -1,0 +1,26 @@
+{
+  "checkout": {
+    "repository": "actions/checkout",
+    "sha": "11d5960a326750d5838078e36cf38b85af677262"
+  },
+  "setup-node": {
+    "repository": "actions/setup-node",
+    "sha": "49933ea5288caeca8642d1e84afbd3f7d6820020"
+  },
+  "setup-bun": {
+    "repository": "oven-sh/setup-bun",
+    "sha": "0c5077e51419868618aeaa5fe8019c62421857d6"
+  },
+  "rust-toolchain": {
+    "repository": "dtolnay/rust-toolchain",
+    "sha": "b725eda525362e7cf34af9a7243cac1e3f01a7ec"
+  },
+  "tauri-action": {
+    "repository": "tauri-apps/tauri-action",
+    "sha": "1deb371b0cd8bd54025b384f1cd735e725c4060f"
+  },
+  "upload-artifact": {
+    "repository": "actions/upload-artifact",
+    "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+  }
+}
