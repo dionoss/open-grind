@@ -1,0 +1,189 @@
+name: Build Linux desktop AppImage from upstream main
+
+# Builds the unsigned x86_64 AppImage from upstream main with upstream's own
+# pinned Debian 12 Podman recipe (ci/linux) and publishes it as a GitHub
+# pre-release. Release assets, not workflow artifacts, because artifacts need a
+# login to download. The AppImage is unsigned and unreviewed upstream code: the
+# only integrity claims are the SHA256SUMS, provenance.json and the build
+# attestation, which prove where the file was built, not that the code is safe.
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-grind-desktop
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://git.opengrind.org/open-grind/open-grind.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      short: ${{ steps.check.outputs.short }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Read upstream main and look for an existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_sha=$(git ls-remote "$UPSTREAM_URL" "refs/heads/$UPSTREAM_BRANCH" | cut -f1)
+          [[ "$upstream_sha" =~ ^[0-9a-f]{40}$ ]]
+          short=${upstream_sha:0:12}
+          build=true
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/desktop-main-$short" >/dev/null 2>&1; then
+            build=false
+          fi
+          {
+            echo "upstream_sha=$upstream_sha"
+            echo "short=$short"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+          echo "Upstream main: $upstream_sha; build: $build" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+      SHORT: ${{ needs.check.outputs.short }}
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out pinned upstream source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init source
+          git -C source remote add origin "$UPSTREAM_URL"
+          git -C source fetch --no-tags origin "$UPSTREAM_SHA"
+          git -C source checkout --detach "$UPSTREAM_SHA"
+          [ "$(git -C source rev-parse HEAD)" = "$UPSTREAM_SHA" ]
+          git -C source submodule update --init --recursive
+      - name: Build with upstream's Podman recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          podman --version
+          podman build -t open-grind-linux source/ci/linux
+          podman run --rm -v "$PWD/source:/work" open-grind-linux sh ci/linux/build.sh
+      - name: Collect, check and describe the AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=(source/src-tauri/target/release/bundle/appimage/open-grind-v*-linux-x86_64.AppImage)
+          [ "${#found[@]}" -eq 1 ] || { echo "expected one AppImage, found ${#found[@]}" >&2; exit 1; }
+          mkdir -p release
+          name="open-grind-main-$SHORT-linux-x86_64.AppImage"
+          cp "${found[0]}" "release/$name"
+          chmod 0755 "release/$name"
+          [ "$(head -c 4 "release/$name" | od -An -c | tr -d ' ')" = '177ELF' ] || { echo "not an ELF file" >&2; exit 1; }
+          [ "$(stat -c %s "release/$name")" -gt 10000000 ] || { echo "AppImage suspiciously small" >&2; exit 1; }
+          (cd release && sha256sum "$name" > SHA256SUMS && sha256sum -c SHA256SUMS)
+          python3 - <<'PY'
+          import json, os, subprocess
+          def out(*a):
+              return subprocess.check_output(a, text=True).strip()
+          subs = []
+          for line in out('git', '-C', 'source', 'submodule', 'status', '--recursive').splitlines():
+              line = line.strip()
+              sha, path = line.split()[:2]
+              subs.append({'path': path, 'sha': sha.lstrip('+-U')})
+          with open('source/src-tauri/tauri.conf.json') as f:
+              version = json.load(f)['version']
+          name = f"open-grind-main-{os.environ['SHORT']}-linux-x86_64.AppImage"
+          sums = open('release/SHA256SUMS').read().split()[0]
+          prov = {
+              'upstream_url': os.environ['UPSTREAM_URL'].removesuffix('.git'),
+              'upstream_branch': os.environ['UPSTREAM_BRANCH'],
+              'upstream_commit': os.environ['UPSTREAM_SHA'],
+              'upstream_version': version,
+              'submodules': subs,
+              'asset': name,
+              'sha256': sums,
+              'runner_image': f"{os.environ.get('ImageOS', 'unknown')} {os.environ.get('ImageVersion', 'unknown')}",
+              'podman': out('podman', '--version'),
+              'build_recipe': 'upstream ci/linux (podman build; sh ci/linux/build.sh)',
+              'signed': False,
+              'built_at': out('date', '-u', '+%Y-%m-%dT%H:%M:%SZ'),
+              'automation_commit': os.environ['GITHUB_SHA'],
+              'workflow_run': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'runtime_tested': False,
+          }
+          with open('release/provenance.json', 'w') as f:
+              json.dump(prov, f, indent=2)
+              f.write('\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as s:
+              s.write(f"Unsigned AppImage built from upstream `{os.environ['UPSTREAM_SHA']}`.\n\nSHA256: `{sums}`\n\nNot run on any device by this workflow.\n")
+          PY
+      - name: Upload build output for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-main-${{ needs.check.outputs.short }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      SHORT: ${{ needs.check.outputs.short }}
+      UPSTREAM_SHA: ${{ needs.check.outputs.upstream_sha }}
+    steps:
+      - name: Download build output
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: desktop-main-${{ needs.check.outputs.short }}
+          path: release
+      - name: Re-verify checksum before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          [ "$(wc -l < SHA256SUMS)" -eq 1 ]
+          sha256sum -c SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: release/open-grind-main-*-linux-x86_64.AppImage
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="desktop-main-$SHORT"
+          notes="Unsigned Linux x86_64 AppImage built from upstream main commit \`$UPSTREAM_SHA\`. Built by this repository's workflow with upstream's Podman recipe; not run on any device by CI. Verify with SHA256SUMS; see provenance.json."
+          gh release create "$tag" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Open Grind desktop main $SHORT" \
+            --notes "$notes"
